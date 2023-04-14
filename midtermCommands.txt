@@ -1,0 +1,101 @@
+node0: mongos: ec2-54-226-173-1.compute-1.amazonaws.com
+node0:port#27017 mongos server 
+
+node1: configs: ec2-3-94-196-162.compute-1.amazonaws.com
+node1:port#27031 config server  PRIMARY	
+node1:port#27032 config server SECONDARY
+node1:port#27033 config server SECONDARY
+
+node2: shard1: ec2-34-230-29-212.compute-1.amazonaws.com
+node2:port#26001 shard1 server PRIMARY
+node2:port#26002 shard1 server SECONDARY
+node2:port#26003 shard1 server SECONDARY
+
+node3: shard2: ec2-34-226-213-111.compute-1.amazonaws.com
+node3:port#26101 shard2 server PRIMARY
+node3:port#26102 shard2 server SECONDARY
+node3:port#26103 shard2 server SECONDARY
+
+node4: shard3: ec2-54-226-251-91.compute-1.amazonaws.com
+node4:port#26201 shard3 server PRIMARY
+node4:port#26202 shard3 server SECONDARY
+node4:port#26203 shard3 server SECONDARY
+
+// connect to ec2 instances
+mongos: ssh -i midtermKey.pem ubuntu@54.226.173.1 ec2-54-226-173-1.compute-1.amazonaws.com
+config: ssh -i midtermKey.pem ubuntu@3.94.196.162 ec2-3-94-196-162.compute-1.amazonaws.com
+shard1: ssh -i midtermKey.pem ubuntu@34.230.29.212 ec2-34-230-29-212.compute-1.amazonaws.com
+shard2: ssh -i midtermKey.pem ubuntu@34.226.213.111 ec2-34-226-213-111.compute-1.amazonaws.com
+shard3: ssh -i midtermKey.pem ubuntu@54.226.251.91 ec2-54-226-251-91.compute-1.amazonaws.com
+
+
+// install mongodb
+curl -sS https://pgp.mongodb.com/server-6.0.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/mongodb-6.0.gpg
+echo "deb [ arch=amd64,arm64 signed=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+sudo apt-get update
+sudo apt-get install -y mongodb-org
+
+
+config:
+sudo mongod --port 27031 --configsvr --replSet config --dbpath /db/config1 --bind_ip localhost,ec2-3-94-196-162.compute-1.amazonaws.com
+sudo mongod --port 27032 --configsvr --replSet config --dbpath /db/config2 --bind_ip localhost,ec2-3-94-196-162.compute-1.amazonaws.com
+sudo mongod --port 27033 --configsvr --replSet config --dbpath /db/config3 --bind_ip localhost,ec2-3-94-196-162.compute-1.amazonaws.com
+rs.add("ec2-3-94-196-162.compute-1.amazonaws.com:27032")
+rs.add("ec2-3-94-196-162.compute-1.amazonaws.com:27033")
+
+mongos:
+// start mongos server, listening to config server on ...
+sudo mongos --configdb config/ec2-3-94-196-162.compute-1.amazonaws.com:27031,ec2-3-94-196-162.compute-1.amazonaws.com:27032,ec2-3-94-196-162.compute-1.amazonaws.com:27033 --bind_ip localhost,ec2-54-226-173-1.compute-1.amazonaws.com
+// connect to mongos
+mongosh --host ec2-54-226-173-1.compute-1.amazonaws.com --port 27017
+
+// enable sharding
+sh.enableSharding("companydb")
+use companydb
+db.company.createIndex({"name":"hashed"})
+sh.shardCollection("companydb.company",{"name":"hashed"})
+
+// import data
+wget https://raw.githubusercontent.com/neelabalan/mongodb-sample-dataset/main/sample_training/companies.json
+mongoimport --port 27017 --db companydb --collection company --file companies.json
+
+shard1:
+sudo mongod --port 26001 --shardsvr --bind_ip localhost,ec2-34-230-29-212.compute-1.amazonaws.com --replSet shard1 --dbpath db/shard1/mem1
+sudo mongod --port 26002 --shardsvr --bind_ip localhost,ec2-34-230-29-212.compute-1.amazonaws.com --replSet shard1 --dbpath db/shard1/mem2
+sudo mongod --port 26003 --shardsvr --bind_ip localhost,ec2-34-230-29-212.compute-1.amazonaws.com --replSet shard1 --dbpath db/shard1/mem3
+
+mongosh --port 26001
+rs.initiate()
+rs.status()
+rs.add("ec2-34-230-29-212.compute-1.amazonaws.com:26002")
+rs.add("ec2-34-230-29-212.compute-1.amazonaws.com:26003")
+rs.status()
+
+shard2:
+sudo mongod --port 26101 --shardsvr --bind_ip localhost,ec2-34-226-213-111.compute-1.amazonaws.com --replSet shard2 --dbpath db/shard2/mem1
+sudo mongod --port 26102 --shardsvr --bind_ip localhost,ec2-34-226-213-111.compute-1.amazonaws.com --replSet shard2 --dbpath db/shard2/mem2
+sudo mongod --port 26103 --shardsvr --bind_ip localhost,ec2-34-226-213-111.compute-1.amazonaws.com --replSet shard2 --dbpath db/shard2/mem3
+
+mongosh --port 26101
+rs.initiate()
+rs.status()
+rs.add("ec2-34-226-213-111.compute-1.amazonaws.com:26102")
+rs.add("ec2-34-226-213-111.compute-1.amazonaws.com:26103")
+rs.status()
+
+shard3:
+sudo mongod --port 26201 --shardsvr --bind_ip localhost,ec2-54-226-251-91.compute-1.amazonaws.com --replSet shard3 --dbpath db/shard3/mem1
+sudo mongod --port 26202 --shardsvr --bind_ip localhost,ec2-54-226-251-91.compute-1.amazonaws.com --replSet shard3 --dbpath db/shard3/mem2
+sudo mongod --port 26203 --shardsvr --bind_ip localhost,ec2-54-226-251-91.compute-1.amazonaws.com --replSet shard3 --dbpath db/shard3/mem3
+
+mongosh --port 26201
+rs.initiate()
+rs.status()
+rs.add("ec2-54-226-251-91.compute-1.amazonaws.com:26202")
+rs.add("ec2-54-226-251-91.compute-1.amazonaws.com:26203")
+rs.status()
+
+Add Shard:
+sh.addShard("shard1/ec2-34-230-29-212.compute-1.amazonaws.com:26001")
+sh.addShard("shard2/ec2-34-226-213-111.compute-1.amazonaws.com:26101")
+sh.addShard("shard3/ec2-54-226-251-91.compute-1.amazonaws.com:26201")
